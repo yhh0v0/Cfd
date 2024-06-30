@@ -1,0 +1,309 @@
+import time
+from WindPy import w
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from docx import Document  # docx是Python的Word模块，
+from docx.shared import Pt  # 第一次使用需安装Python-docx
+from docx.shared import Inches
+from docx.oxml.ns import qn
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+import sys
+from PyQt5.QtWidgets import QApplication, QMainWindow, QGraphicsScene,QFileDialog
+from functools import partial
+import Click1
+from qt_material import apply_stylesheet
+from PIL import Image
+
+
+Itemlist = ['StartDate', 'EndDate', 'TotalCirculation', 'IssuesNumbers', 'TotalRepaymentAmount',
+            'NetFinancingAmount', 'MaturityRepaymentAmount', 'ExpiresIssues', 'EarlyRedemptionAmount',
+            'EarlyRedemptionIssues', 'SalesAmount', 'SalesIssues', 'RedemptionAmount', 'RedemptionIssues']
+
+app = QApplication(sys.argv)
+MainWindow = QMainWindow()
+ui = Click1.Ui_MainWindow()
+
+# Wind，启动！
+def start():
+    start_result = w.start()
+    return start_result
+
+# 命令如何写可以用命令生成器来辅助完成
+# 定义打印输出函数，用来展示数据使用
+def printpy(outdata):
+    if outdata.ErrorCode != 0:
+        print('error code:' + str(outdata.ErrorCode) + '\n')
+        return ()
+    for i in range(0, len(outdata.Data[0])):
+        strTemp = ''
+        if len(outdata.Times) > 1:
+            strTemp = str(outdata.Times[i]) + ' '
+        for k in range(0, len(outdata.Fields)):
+            strTemp = strTemp + str(outdata.Data[k][i]) + ' '
+        print(strTemp)
+
+
+# 将Wind的API数据转换为Dataframe序列的函数
+def dataswitch(wsd_data):
+    if wsd_data.ErrorCode == 0:
+
+        # 此处使用字典构成Series序列
+        Itemdic = {}
+        for i in range(0, len(Itemlist)):
+            Itemdic[Itemlist[i]] = pd.Series(wsd_data.Data[i])
+
+        # 使用Series构成Dataframe
+        fm = pd.DataFrame(Itemdic)
+
+        # 将None转换为0
+        fm = fm.fillna(0)
+
+        # 重置Dataframe的Index为时间
+        today = time.localtime()
+        fm.index = pd.date_range(start='2022-01-01', end=time.strftime('%Y-%m-%d', time.localtime()))
+        return fm
+
+    else:
+        # 报错情况
+        print("Error Code:", wsd_data.ErrorCode)
+        print("Error Message:", wsd_data.Data[0][0])
+
+
+# 导入数据函数
+def getdata():
+    datalist = []
+    typelist = ['cps', 'medium-termnotes', 'corporatebonds', 'enterprisebonds', 'ppn',
+                'corporatebondsofsecuritiescompany', 'securitiescompanycps']
+
+    for i in range(0, 7):
+        datalist.append(dataswitch(
+                w.wset("bondissuanceandmaturity", "startdate=%s;enddate=%s;frequency=day;maingrade=all;"
+                                    "zxgrade=all;datetype=startdate;type=default;publishlimited=all;""bond"
+                                    "type=%s;bondid=1000008489000000,a101020100000000,a101020200000000"
+                                    ",a101020300000000,1000011872000000,a101020400000000,a101020700000000"
+                                    ",a101020800000000,a101020b00000000,a101020500000000,1000013981000000"
+                                    ",1000002993000000,1000004571000000,1000040753000000,a101020a00000000"
+                                    ",a101020600000000,1000016455000000,a101020900000000" % ('2022-01-01',time.strftime(
+    '%Y-%m-%d', time.localtime()), typelist[i]))))
+    print(datalist)
+
+    if datalist[0] is None:
+        ui.textBrowser.append('错误代码-40522017，访问次数过多，今日不再可以查询数据，请明日再来')
+        flag=0
+        return flag
+    else:
+        # 计算券商债总和
+        pc = pd.DataFrame()
+        pc[Itemlist[0]] = datalist[0]['StartDate']
+        pc[Itemlist[1]] = datalist[0]['StartDate']
+        for i in range(2, len(Itemlist)):
+            pc[Itemlist[i]] = datalist[5][Itemlist[i]] + datalist[6][Itemlist[i]]
+        datalist.append(pc)
+
+        # 制作数据Dataframe
+        pb = pd.DataFrame()
+        pb['Date'] = datalist[0]['StartDate']
+
+        # 分别计算数据总和
+        for i in range(2, len(Itemlist)):
+            pb[Itemlist[i]] = datalist[0][Itemlist[i]] + datalist[1][Itemlist[i]] + datalist[2][Itemlist[i]] + datalist[3][
+                Itemlist[i]] + datalist[4][Itemlist[i]] + datalist[7][Itemlist[i]]
+
+        datalist.append(pb)
+        print(len(datalist))
+        print(datalist[8])
+        return datalist
+
+
+# 数据导出函数
+def output(data):
+    # 此处为导出路径
+    print('系统将自动保存到程序所在目录的文件夹Daily中……\n')
+    outputpath = './Daily/DataFrame.csv'
+    data[8].to_csv(outputpath, sep=',', index=True, header=True)
+    return outputpath
+
+# 对数据进行作图
+def plot(data):
+    # 制作新的dataframe接受数据
+    pt = pd.DataFrame()
+    pt['Date'] = data[8]['Date']
+    pt['TotalCirculation'] = data[8]['TotalCirculation']
+    pt['TotalRepaymentAmount'] = data[8]['TotalRepaymentAmount']
+    pt['NetFinancingAmount'] = data[8]['NetFinancingAmount']
+
+    # 由于时间戳无法作为图像下表，引入时间字符串序列
+    Datetime = pt['Date'].tolist()
+    for i in range(0, len(Datetime)):
+        Datetime[i] = Datetime[i].strftime('%Y-%m-%d')
+
+    # 图像由折线图和柱状图组成，分别由两个dataframe接受数据
+    df1 = pd.DataFrame(index=Datetime)
+    df1['TotalCirculation'] = pt['TotalCirculation']
+    df1['TotalRepaymentAmount'] = pt['TotalRepaymentAmount']
+    df2 = pd.DataFrame(index=Datetime)
+    df2['NetFinancingAmount'] = pt['NetFinancingAmount']
+
+    # 以下是作图代码
+    plt.figure(figsize=(12, 6))
+    plt.rcParams["font.sans-serif"] = ["SimHei"]
+    plt.rcParams["axes.unicode_minus"] = False
+    plt.grid(True)
+
+    # 绘制柱状图
+    for i in range(len(Datetime)):
+        plt.bar(Datetime[i], pt['TotalCirculation'].tolist()[i], color=['gold'], alpha=0.7)
+        plt.bar(Datetime[i], pt['TotalRepaymentAmount'].tolist()[i], color=['lightskyblue'], alpha=0.7)
+
+    # 设置柱状图标签
+    x_major_locator = plt.MultipleLocator(60)
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(x_major_locator)
+    plt.xticks(rotation=30)
+
+    # 设置柱状图图例
+    plt.legend(['总发行量（亿元）', '总偿还量'], fontsize=12, ncol=5, bbox_to_anchor=(0.6, -0.1), frameon=False)
+
+    # 绘制折线图及其图例
+    ax2 = ax.twinx()
+    df2.plot(ax=ax2, color=['green'], alpha=0.7)
+    ax2.get_legend().remove()
+    plt.legend(['净融资（右）'], fontsize=12, ncol=5, bbox_to_anchor=(0.8, -0.1), frameon=False)
+    plt.gcf().subplots_adjust(bottom=0.15)
+
+    # 设置标题
+    plt.title('全市场信用债发行情况\n', fontsize=20)
+
+    # 导出图像
+    plt.savefig('./Daily/Data.png')
+
+    #ui.scene = QGraphicsScene()  # 创建一个场景
+    #ui.scene.addWidget(plt)  # 将图形元素添加到场景中
+    #ui.graphicsView.setScene(ui.scene)  # 将创建添加到图形视图显示窗口
+    return plt
+
+def stringdata(data1):
+    today = time.strftime('%Y-%m-%d', time.localtime())
+    listc = [7, 3, 2, 1, 0, 4]
+    listd = ['券商债', '企业债', '公司债', '中期票据', '短期及超短融', '定向工具']
+    TCtoday = data1[8].loc[today, 'IssuesNumbers']
+    QStoday = ''
+    QYtoday = ''
+    GStoday = ''
+    ZPtoday = ''
+    DQtoday = ''
+    DXtoday = ''
+    listb = [QStoday, QYtoday, GStoday, ZPtoday, DQtoday, DXtoday]
+    GMtoday = '发行规模总计%s亿元' % round(float(data1[8].loc[today, 'TotalCirculation']),2)
+
+    for i in range(len(listb)): 
+        if data1[listc[i]].loc[today, 'IssuesNumbers'] == 0:
+            listb[i] = ''
+        else:
+            listb[i] = '%s%s只，' % (listd[i], data1[listc[i]].loc[today, 'IssuesNumbers'])
+
+    RRtoday = round(float(data1[8].loc[today, 'NetFinancingAmount']),2)
+    p1 = '    今日一级信用债总簿记%s只，其中%s%s%s%s%s%s%s，净融入%s亿元。' % (
+        TCtoday, listb[0], listb[1], listb[2], listb[3], listb[4], listb[5], GMtoday, RRtoday
+    )
+    return p1
+
+# 输出word文档
+def word(p1):
+    doc = Document()
+    doc.styles['Normal'].font.name = '宋体'  # 给段落(正文)设字休
+    doc.styles['Normal']._element.rPr.rFonts.set(qn('w:eastAsia'), '楷体')
+    run = doc.add_heading('', 0).add_run('\n每日信用债跟踪-%s年%s月%s日' % (time.strftime('%Y', time.localtime()),
+                                                                            time.strftime('%m', time.localtime()),
+                                                                            time.strftime('%d', time.localtime())))
+    run.font.name = '宋体'  # 给标题设字体
+    _title = doc.styles['Title']  # level=0相当于styles['Title']
+    _title.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER  # 标题居中
+    run._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+    run.font.size = Pt(14)
+    run.font.bold = True
+
+    header = doc.sections[0].header  # 获取第一个节的页眉
+    paragraph = header.paragraphs[0]  # 获取页眉的第一个段落
+    run0 = paragraph.add_run()  # 添加页面内容
+    run0.add_picture('./icon.png', width=Inches(2.5), height=Inches(0.35))
+    paragraph.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run00 = paragraph.add_run('\n内部资料，严禁对外传播转载')
+    run00.font.bold = True
+    # run00.font.color='red'
+    paragraph.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+   
+    # 小标题
+    Head = doc.add_heading("", level=1)
+    run1 = Head.add_run('一、一级市场发行情况')
+    Head.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run1.font.name = u'宋体'
+    run1.font.size = Pt(12)
+    run1._element.rPr.rFonts.set(qn('w:eastAsia'), u'宋体')
+
+    para1 = doc.add_paragraph(p1)
+    para1.paragraph_format.line_spacing = Pt(20)
+
+    doc.add_picture('./Daily/Data.png', width=Inches(6), height=Inches(3))
+
+    Head1 = doc.add_heading("", level=1)
+    run2 = Head1.add_run('二、一级关注债券情况')
+    Head1.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run2.font.name = u'宋体'
+    run2.font.size = Pt(12)
+    run2._element.rPr.rFonts.set(qn('w:eastAsia'), u'宋体')
+
+    para2 = doc.add_paragraph('此处输入正文')
+    para2.paragraph_format.line_spacing = Pt(20)
+
+    Head2 = doc.add_heading("", level=1)
+    run3 = Head2.add_run('三、二级关注债券情况')
+    Head2.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run3.font.name = u'宋体'
+    run3.font.size = Pt(12)
+    run3._element.rPr.rFonts.set(qn('w:eastAsia'), u'宋体')
+
+    para3 = doc.add_paragraph('此处输入正文')
+    para3.paragraph_format.line_spacing = Pt(20)
+
+    Head3 = doc.add_heading("", level=1)
+    run4 = Head3.add_run('四、市场舆情情况')
+    Head3.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run4.font.name = u'宋体'
+    run4.font.size = Pt(12)
+    run4._element.rPr.rFonts.set(qn('w:eastAsia'), u'宋体')
+
+    para4 = doc.add_paragraph('此处输入正文')
+    para4.paragraph_format.line_spacing = Pt(20)
+
+    doc.save('./Daily/Daily.docx')
+    print('成功输出文档！\n')
+
+
+
+def CfDmain():
+    a = str(start())
+    ui.textBrowser.setText(a)
+    st=str(int(time.strftime('%Y', time.localtime()))-1)
+    b=getdata()
+
+    if b !=0:
+        c=stringdata(b)
+        ui.textBrowser.append('成功输出至右侧！您可以在窗口内直接进行复制')
+        ui.textEdit.setText(c)
+        plot(b)
+        word(c)
+        output(b)
+    else:
+        pass
+    
+def main():
+    ui.setupUi(MainWindow)
+    apply_stylesheet(app, theme='dark_teal.xml')
+    MainWindow.show()
+    ui.pushButton.clicked.connect(partial(CfDmain))
+    sys.exit(app.exec_())
+
+main()
